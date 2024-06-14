@@ -1281,7 +1281,7 @@ class RoBERTaGAT(BertEncoder):
                 gnn_layer_index = i - self.num_hidden_layers + self.k
                 if cache_output:
                     _X, _X_attn = self.gnn_layers[gnn_layer_index](_X, edge_index, edge_type, _node_type, _node_feature_extra,return_attention_weights=cache_output)
-                    # 取最后一个注意力头的注意力分数
+                    
                     gnn_attn = _X_attn[1][:, -1]
                     edge_map = _X_attn[0]
                     gnn_attn = gnn_attn[0:500]
@@ -1300,100 +1300,30 @@ class RoBERTaGAT(BertEncoder):
 
                 # Exchange info between LM and GNN hidden states (Modality interaction)
                 if self.info_exchange == True or (self.info_exchange == "every-other-layer" and (i - self.num_hidden_layers + self.k) % 2 == 0):
-                    X = _X.view(bs, -1, _X.size(1)) # [bs, max_num_nodes, node_dim]
-                    # print("X:", X.size())
+                    X = _X.view(bs, -1, _X.size(1)) # [bs, max_num_nodes, node_dim] 
 
-                    # 交互token：context_node_lm_feats 交互node：context_node_gnn_feats
-                    context_node_lm_feats = hidden_states[:, 0, :] # [bs, sent_dim]
-                    context_node_gnn_feats = X[:, 0, :] # [bs, node_dim]
-                    context_node_feats = torch.cat([context_node_lm_feats, context_node_gnn_feats], dim=1)
-                    if self.sep_ie_layers:
-                        _context_node_feats = self.ie_layers[gnn_layer_index](context_node_feats)
-                    else:
-                        _context_node_feats = self.ie_layer(context_node_feats)
-                    if self.args.residual_ie == 1:
-                        context_node_feats = context_node_feats + _context_node_feats
-                    elif self.args.residual_ie == 2:
-                        context_node_feats = self.ie_LayerNorm(context_node_feats + _context_node_feats)
-                    else:
-                        context_node_feats = _context_node_feats
-                    context_node_lm_feats, context_node_gnn_feats = torch.split(context_node_feats, [context_node_lm_feats.size(1), context_node_gnn_feats.size(1)], dim=1)
-                    hidden_states[:, 0, :] = context_node_lm_feats
-                    X[:, 0, :] = context_node_gnn_feats
+                    for i in range(1, 20, 2):
+                        ex_node_lm_feats = hidden_states[:, i, :]  # [bs, sent_dim]
+                        for j in range(0, 2):
+                            ex_node_gnn_feats = X[:, i + j, :]  # [bs, node_dim]
+                            ex_node_feats = torch.cat([ex_node_lm_feats, ex_node_gnn_feats], dim=1)
+                            if self.sep_ie_layers:
+                                _ex_node_feats = self.ie_layers[gnn_layer_index](ex_node_feats)
+                            else:
+                                _ex_node_feats = self.ie_layer(ex_node_feats)
+                            if self.args.residual_ie == 1:
+                                ex_node_feats = ex_node_feats + _ex_node_feats
+                            elif self.args.residual_ie == 2:
+                                ex_node_feats = self.ie_LayerNorm(ex_node_feats + _ex_node_feats)
+                            else:
+                                ex_node_feats = _ex_node_feats
+                            ex_node_lm_feats, ex_node_gnn_feats = torch.split(ex_node_feats,
+                                                                              [ex_node_lm_feats.size(1),
+                                                                               ex_node_gnn_feats.size(1)],
+                                                                              dim=1)
+                            X[:, i + j, :] = ex_node_gnn_feats
+                        hidden_states[:, i, :] = ex_node_lm_feats
                     _X = X.view_as(_X)
-
-                    # 交互token：context_node_lm_feats 交互node：context_node_gnn_feats
-                    # context_node_lm_feats = hidden_states[:, 0, :]  # [bs, sent_dim]
-                    # context_node_gnn_feats = X[:, 0, :]  # [bs, node_dim]
-                    # context_node_feats = torch.cat([context_node_lm_feats, context_node_gnn_feats], dim=1)
-                    # if self.sep_ie_layers:
-                    #     _context_node_feats = self.ie_layers[gnn_layer_index](context_node_feats)
-                    # else:
-                    #     _context_node_feats = self.ie_layer(context_node_feats)
-                    # if self.args.residual_ie == 1:
-                    #     context_node_feats = context_node_feats + _context_node_feats
-                    # elif self.args.residual_ie == 2:
-                    #     context_node_feats = self.ie_LayerNorm(context_node_feats + _context_node_feats)
-                    # else:
-                    #     context_node_feats = _context_node_feats
-                    # context_node_lm_feats, context_node_gnn_feats = torch.split(context_node_feats,
-                    #                                                             [context_node_lm_feats.size(1),
-                    #                                                              context_node_gnn_feats.size(1)], dim=1)
-                    # hidden_states[:, 0, :] = context_node_lm_feats
-                    # X[:, 0, :] = context_node_gnn_feats
-
-                    # 交互所有对应token和node
-                    ## medqa-usmle (1, 20, 2) (0, 2)
-                    # for i in range(1, 20, 2):
-                    #     ex_node_lm_feats = hidden_states[:, i, :]  # [bs, sent_dim]
-                    #     # print("ex_node_lm_feats:", ex_node_lm_feats.size())
-                    #     for j in range(0, 2):
-                    #         ex_node_gnn_feats = X[:, i + j, :]  # [bs, node_dim]
-                    #         # print("ex_node_gnn_feats:", ex_node_gnn_feats.size())
-                    #         ex_node_feats = torch.cat([ex_node_lm_feats, ex_node_gnn_feats], dim=1)
-                    #         if self.sep_ie_layers:
-                    #             _ex_node_feats = self.ie_layers[gnn_layer_index](ex_node_feats)
-                    #         else:
-                    #             _ex_node_feats = self.ie_layer(ex_node_feats)
-                    #         if self.args.residual_ie == 1:
-                    #             ex_node_feats = ex_node_feats + _ex_node_feats
-                    #         elif self.args.residual_ie == 2:
-                    #             ex_node_feats = self.ie_LayerNorm(ex_node_feats + _ex_node_feats)
-                    #         else:
-                    #             ex_node_feats = _ex_node_feats
-                    #         ex_node_lm_feats, ex_node_gnn_feats = torch.split(ex_node_feats,
-                    #                                                           [ex_node_lm_feats.size(1),
-                    #                                                            ex_node_gnn_feats.size(1)],
-                    #                                                           dim=1)
-                    #         X[:, i + j, :] = ex_node_gnn_feats
-                    #     hidden_states[:, i, :] = ex_node_lm_feats
-                    # _X = X.view_as(_X)
-
-                    # medmcqa (1, 15) (0, 2)
-                    # for i in range(1, 15):
-                    #     ex_node_gnn_feats = X[:, i, :]  # [bs, node_dim]
-                    #     for j in range(0, 2):
-                    #         ex_node_lm_feats = hidden_states[:, i + j, :]  # [bs, sent_dim]
-                    #         ex_node_feats = torch.cat([ex_node_lm_feats, ex_node_gnn_feats], dim=1)
-                    #         if self.sep_ie_layers:
-                    #             _ex_node_feats = self.ie_layers[gnn_layer_index](ex_node_feats)
-                    #         else:
-                    #             _ex_node_feats = self.ie_layer(ex_node_feats)
-                    #         if self.args.residual_ie == 1:
-                    #             ex_node_feats = ex_node_feats + _ex_node_feats
-                    #         elif self.args.residual_ie == 2:
-                    #             ex_node_feats = self.ie_LayerNorm(ex_node_feats + _ex_node_feats)
-                    #         else:
-                    #             ex_node_feats = _ex_node_feats
-                    #         ex_node_lm_feats, ex_node_gnn_feats = torch.split(ex_node_feats,
-                    #                                                           [ex_node_lm_feats.size(1),
-                    #                                                            ex_node_gnn_feats.size(1)],
-                    #                                                           dim=1)
-                    #         X[:, i + j, :] = ex_node_gnn_feats
-                    #     hidden_states[:, i, :] = ex_node_lm_feats
-                    # _X = X.view_as(_X)
-
-
 
         # Add last layer
         if output_hidden_states:
